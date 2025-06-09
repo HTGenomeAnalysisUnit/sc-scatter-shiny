@@ -1,0 +1,15 @@
+marimo==0.13.11
+scanpy>=1.10
+jupyter-scatter==0.22.0
+shiny==1.4.0
+tiledbsoma==1.17.0
+seaborn==0.13.2
+pandas
+jupyterlab
+ipykernel
+ipywidgets
+igraph
+leidenalg
+rsconnect-python
+nodejs
+shinywidgets

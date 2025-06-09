@@ -1,0 +1,23 @@
+[project]
+name = "sc-scatter-shiny"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.9.10"
+dependencies = [
+    "igraph>=0.11.8",
+    "ipykernel>=6.29.5",
+    "ipywidgets>=8.1.7",
+    "jupyter-scatter==0.22.0",
+    "jupyterlab>=4.4.3",
+    "leidenalg>=0.10.2",
+    "marimo==0.13.11",
+    "nodejs>=0.1.1",
+    "pandas>=2.2.3",
+    "rsconnect-python>=1.25.2",
+    "scanpy>=1.10",
+    "seaborn==0.13.2",
+    "shiny==1.4.0",
+    "shinywidgets>=0.6.2",
+    "tiledbsoma==1.17.0",
+]
