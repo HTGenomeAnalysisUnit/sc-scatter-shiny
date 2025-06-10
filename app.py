@@ -37,9 +37,10 @@ def get_h5ad_files():
 def load_adata(filename):
     """Loads an .h5ad file and checks for UMAP coordinates."""
     try:
-        adata = sc.read_h5ad(os.path.join(DATA_DIR, filename))
+        adata = sc.read_h5ad(os.path.join(DATA_DIR, filename), backed="r")
         if 'X_umap' not in adata.obsm:
             # Make UMAP if not pre-computed, just for example data
+            print("UMAP not found, computing...")
             sc.pp.pca(adata)
             sc.pp.neighbors(adata)
             sc.tl.umap(adata)
