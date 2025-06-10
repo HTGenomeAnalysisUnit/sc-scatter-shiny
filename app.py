@@ -106,6 +106,8 @@ app_ui = ui.page_fluid(
     ui.layout_sidebar(
         ui.sidebar(
             ui.input_selectize("dataset", "1. Select Dataset", choices=get_h5ad_files(), selected=None),
+
+            ui.input_action_button("load_data", "Load data", class_="btn-primary w-100"),
             
             ui.input_selectize("obs_cols", "2. Select up to 3 OBS columns", choices=[], multiple=True),
             
@@ -154,23 +156,51 @@ def server(input, output, session):
     # reactive.Value to share the jscatter view object
     base_jscatter_view = reactive.Value(None)
 
+    # reactive value for groups index values
+    group1_indices = reactive.Value([])
+    group2_indices = reactive.Value([])
+
     @reactive.Effect
-    @reactive.event(input.dataset)
+    @reactive.event(input.load_data)
     def _load_data():
         """Load data when a new dataset is selected."""
-        dataset_file = input.dataset()
-        if dataset_file:
-            adata = load_adata(dataset_file)
-            if adata is not None:
-                adata_reactive.set(adata)
-                # Update choices for obs and var selectors
-                obs_cols = [col for col in adata.obs.columns]
-                var_genes = list(adata.var_names)
-                cat_cols = list(adata.obs.select_dtypes(include=['category', 'object']).columns)
-                
-                obs_choices.set(obs_cols)
-                var_choices.set(var_genes)
-                categorical_obs_choices.set(cat_cols)
+        notification_id = "loading_notification" 
+        try:
+            ui.notification_show(
+                "Loading data... Please wait.",
+                id=notification_id,
+                duration=None,
+                close_button=False,
+                type="message" # Other types: "warning", "error", "default"
+            )
+
+            dataset_file = input.dataset()
+            if dataset_file:
+                print(f"Loading dataset: {dataset_file}")
+                adata = load_adata(dataset_file)
+                print(f"Dataset loaded")
+                if adata is not None:
+                    adata_reactive.set(adata)
+                    # Update choices for obs and var selectors
+                    obs_cols = [col for col in adata.obs.columns]
+                    var_genes = list(adata.var_names)
+                    cat_cols = list(adata.obs.select_dtypes(include=['category', 'object']).columns)
+                    
+                    obs_choices.set(obs_cols)
+                    var_choices.set(var_genes)
+                    categorical_obs_choices.set(cat_cols)
+
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            ui.notification_show(
+                f"Error loading data: {e}",
+                duration=10,
+                type="error"
+            )
+
+        finally:
+            # Remove the loading notification
+            ui.notification_remove(notification_id)
 
     @reactive.Effect
     def _update_selectors():
@@ -202,7 +232,7 @@ def server(input, output, session):
         return ui.input_selectize("group2_cat", "Select categories for Group 2", choices=categories, multiple=True)
 
     @render.ui
-    @reactive.event(input.generate_plot)
+    @reactive.event(input.generate_plot, input.analyze_selection)
     def plot_or_message_ui():
         # Check we have the data or print error messages
         adata = adata_reactive.get()
@@ -231,6 +261,9 @@ def server(input, output, session):
         adata = adata_reactive.get()
         selected_obs = list(input.obs_cols())
         selected_vars = list(input.var_genes())
+
+        group1_selection = group1_indices.get()
+        group2_selection = group2_indices.get()
         
         umap_coords = pd.DataFrame(adata.obsm['X_umap'], columns=['UMAP1', 'UMAP2'], index=adata.obs.index)
         plot_df = umap_coords.copy()
@@ -252,7 +285,21 @@ def server(input, output, session):
                 p = jscatter.Scatter(x='UMAP1', y='UMAP2', color_by=col, data=plot_df, legend=True)
                 p = p.tooltip(True, properties=[col])
                 views.append(p)
-            composed_view = jscatter.compose(views, sync_view=True, sync_hover=True, sync_selection=True, rows=2)
+
+            if len(group1_selection) > 0 and len(group2_selection) > 0:
+                plot_df['app_grouping'] = 'NotSelected'
+                plot_df.loc[group1_selection, 'app_grouping'] = 'Group1'
+                plot_df.loc[group2_selection, 'app_grouping'] = 'Group2'
+                p = jscatter.Scatter(x='UMAP1', y='UMAP2', 
+                                     color_by="app_grouping", 
+                                     color_map=dict(
+                                        Group1="#29876E", Group2="#5188E2", NotSelected="#E6E6EF"
+                                    ), 
+                                    data=plot_df, legend=True)
+                p = p.tooltip(True, properties=[input.analysis_col()])
+                views.append(p)
+
+            composed_view = jscatter.compose(views, sync_view=True, sync_hover=True, sync_selection=True, cols=2)
             base_jscatter_view.set(base_view)
 
             return composed_view
@@ -281,6 +328,8 @@ def server(input, output, session):
         try:
             indices1 = adata.obs.index[adata.obs[g1_col].isin(g1_cat)]
             indices2 = adata.obs.index[adata.obs[g2_col].isin(g2_cat)]
+            group1_indices.set(indices1)
+            group2_indices.set(indices2)
             print(f"Group 1: {len(indices1)} cells, Group 2: {len(indices2)} cells")
             
             if len(indices1) == 0 or len(indices2) == 0:
@@ -293,11 +342,11 @@ def server(input, output, session):
             return None
 
         selected_cells = indices1.union(indices2).tolist()
-        print(f"Selected cells: {selected_cells[1:5]}")
+        # print(f"Selected cells: {selected_cells[1:5]}")
         base_view.selection(selected_cells)
 
-        adata_g1 = adata[indices1, :].copy()
-        adata_g2 = adata[indices2, :].copy()
+        adata_g1 = adata[indices1, :] #.copy()
+        adata_g2 = adata[indices2, :] #.copy()
 
         fig, axes = plt.subplots(2, 2, figsize=(16, 12), constrained_layout=True)
         fig.suptitle("Paired Group Analysis", fontsize=18)
