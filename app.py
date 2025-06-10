@@ -5,13 +5,11 @@ from shiny import App, reactive, render, ui
 from shinywidgets import output_widget, render_widget
 
 # --- Configuration ---
-# Create a folder named 'data' in the same directory as this app.py file
-# and place your .h5ad files inside it.
+# If data folder does not exists, create one with a dummy h5ad
 DATA_DIR = "data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
-    # As an example, I'll create a dummy AnnData object.
-    # In a real scenario, you would place your own .h5ad files here.
+
     import numpy as np
     import anndata
     
@@ -38,8 +36,7 @@ def load_adata(filename):
     try:
         adata = sc.read_h5ad(os.path.join(DATA_DIR, filename))
         if 'X_umap' not in adata.obsm:
-            # Handle cases where UMAP is not precomputed
-            # This is a basic example; you might need more sophisticated preprocessing
+            # Make UMAP if not pre-computed, just for example data
             sc.pp.pca(adata)
             sc.pp.neighbors(adata)
             sc.tl.umap(adata)
@@ -123,12 +120,10 @@ def server(input, output, session):
         if len(selected_obs) > 3 or len(selected_vars) > 3:
             return ui.p("Please select a maximum of 3 OBS columns and 3 VAR genes.")
         
-        # If all checks pass, we return the output_widget.
-        # This tells Shiny to now render the actual plot.
+        # If all checks pass, return the output_widget.
         return output_widget("scatter_plot_output")
 
-    # **FIX 3: Simplify the render_widget function.**
-    # Its only job is to create the widget, assuming all inputs are valid.
+    # Generate the jscatter plot
     @render_widget
     def scatter_plot_output():
         import jscatter
@@ -154,8 +149,7 @@ def server(input, output, session):
                 views.append(p)
             return jscatter.compose(views, sync_view=True, sync_hover=True, sync_selection=True, rows=2)
         except Exception as e:
-            # Although unlikely to be reached now, it's good practice.
-            # We can't return a ui.p, so we return None to render nothing.
+            # Can't return a ui.p, so return None to render nothing in case of exception
             print(f"Error during jscatter creation: {e}")
             return None
 
@@ -163,7 +157,4 @@ def server(input, output, session):
 app = App(app_ui, server)
 
 # To run this app:
-# 1. Make sure you have installed all required packages (see instructions).
-# 2. Save this code as `app.py`.
-# 3. Create a `data` folder in the same directory and place your `.h5ad` files in it.
-# 4. Run `shiny run --reload app.py` in your terminal.
+# Run `shiny run --reload app.py` in your terminal.
