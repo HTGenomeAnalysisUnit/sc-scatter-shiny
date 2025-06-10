@@ -70,7 +70,7 @@ def plot_top_genes(adata, n_top_genes, ax, group_name=None):
     ax.set_title(f'{group_title_string}Top {n_top_genes} Mean Gene Expressions')
     ax.set_xlabel('Genes')
     ax.set_ylabel('Mean Expression')
-    ax.tick_params(axis='x',rotation=45)
+    ax.tick_params(axis='x',rotation=45, labelsize=10)
 
 def create_value_counts_barplot(df, column_name, ax, group_name=None):
     """
@@ -94,6 +94,7 @@ def create_value_counts_barplot(df, column_name, ax, group_name=None):
     ax.set_title(f"{group_title_string}Value Counts for {column_name} ({n_cells} cells)")
     ax.set_xlabel('Values')
     ax.set_ylabel('Count')
+    ax.tick_params(axis='x',rotation=45, labelsize=10)
 
 # --- Shiny App UI ---
 app_ui = ui.page_fluid(
@@ -138,7 +139,7 @@ app_ui = ui.page_fluid(
             width=350,
         ),
         ui.output_ui("plot_or_message_ui"),
-        ui.output_plot("selection_plots"),
+        ui.output_plot("selection_plots", height="850px"),
     )
 )
 
@@ -308,7 +309,7 @@ def server(input, output, session):
             print(f"Error during jscatter creation: {e}")
             return None
     
-    @render.plot 
+    @render.plot() 
     @reactive.event(input.analyze_selection)    
     def selection_plots():
         base_view = base_jscatter_view.get()
@@ -348,7 +349,7 @@ def server(input, output, session):
         adata_g1 = adata[indices1, :] #.copy()
         adata_g2 = adata[indices2, :] #.copy()
 
-        fig, axes = plt.subplots(2, 2, figsize=(16, 12), constrained_layout=True)
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12), layout="constrained")
         fig.suptitle("Paired Group Analysis", fontsize=18)
         n_top_genes_plot = 5
 
@@ -356,8 +357,6 @@ def server(input, output, session):
         plot_top_genes(adata_g1, n_top_genes_plot, axes[0, 1], "Group 1")
         create_value_counts_barplot(adata_g2.obs, analysis_col, axes[1, 0], "Group 2")
         plot_top_genes(adata_g2, n_top_genes_plot, axes[1, 1], "Group 2")        
-
-        fig.tight_layout()
 
         return fig
 
