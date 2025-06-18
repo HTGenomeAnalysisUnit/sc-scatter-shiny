@@ -6,61 +6,47 @@ import matplotlib.pyplot as plt
 from shiny import App, reactive, render, ui
 from shinywidgets import output_widget, render_widget
 import ipywidgets
+import tiledbsoma
+import pyarrow as pa
+import polars as pl
 
 # --- Configuration ---
 # If data folder does not exists, create one with a dummy h5ad
 DATA_DIR = "data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
-
-    import anndata
-    
-    n_obs, n_vars = 1000, 500
-    adata = anndata.AnnData(np.random.randn(n_obs, n_vars))
-    adata.obs['cell_type'] = np.random.choice(['T-cell', 'B-cell', 'Macrophage'], n_obs).astype('category')
-    adata.obs['leiden'] = np.random.choice([f'cluster_{i}' for i in range(5)], n_obs).astype('category')
-    adata.obs['condition'] = np.random.choice(['Control', 'Treated'], n_obs).astype('category')
-    adata.obs['total_counts'] = np.random.randint(1000, 5000, n_obs)
-    adata.var_names = [f'Gene_{i}' for i in range(n_vars)]
-    # Generate dummy UMAP coordinates
-    sc.pp.pca(adata)
-    sc.pp.neighbors(adata)
-    sc.tl.umap(adata)
-    
-    adata.write_h5ad(os.path.join(DATA_DIR, 'sample_data.h5ad'))
 
 # --- Helper Functions ---
 def get_h5ad_files():
     """Scans the DATA_DIR for .h5ad files."""
     return [f for f in os.listdir(DATA_DIR) if f.endswith(".h5ad")]
 
-def load_adata(filename):
+def load_soma_data(filename):
     """Loads an .h5ad file and checks for UMAP coordinates."""
     try:
-        adata = sc.read_h5ad(os.path.join(DATA_DIR, filename), backed="r")
-        if 'X_umap' not in adata.obsm:
-            # Make UMAP if not pre-computed, just for example data
-            print("UMAP not found, computing...")
-            sc.pp.pca(adata)
-            sc.pp.neighbors(adata)
-            sc.tl.umap(adata)
-        return adata
+        soma = tiledbsoma.open(os.path.join(DATA_DIR, filename))
+        var_pl = pl.from_arrow(soma.ms["RNA"].var.read().concat())
+        obs_pl = pl.from_arrow(soma.obs.var.read().concat())
+        return [soma, var_pl, obs_pl]
     except Exception as e:
         print(f"Error loading {filename}: {e}")
         return None
-
+    
 # --- Accessory plots functions ---
-def plot_top_genes(adata, n_top_genes, ax, group_name=None):
+def plot_top_genes(soma, var_pl, n_top_genes, ax, group_name=None):
     """
     Calculates the mean of each column, selects the top n columns based on mean, 
     and generates a bar plot and density plot for the selected columns.
 
     Args:
-    df (pd.DataFrame): The input DataFrame.
+    soma (soma): The input soma.
     n_top_genes (int): The number of top genes to select.
     """
-    mean_expr = pd.Series(np.asarray(adata.X.mean(axis=0)).ravel(), index=adata.var_names)
-    mean_expr.nlargest(n_top_genes).plot(kind='bar', ax=ax)
+    X = soma.ms["RNA"].X["data"].read().tables().concat()
+
+    gene_group_pl = pa.TableGroupBy(X, "soma_dim_1").aggregate([("soma_data", "mean")]).to_polars()
+
+    gene_var_group_pl = gene_group_pl.join(var_pl, left_on = "soma_dim_1", right_on = "soma_joinid")
+    
+    gene_var_group_pl.top_k(n_top_genes, by = "soma_data_mean").plot(kind='bar', ax=ax)
         
     group_title_string = ""
     if group_name: 
@@ -147,7 +133,7 @@ app_ui = ui.page_fluid(
 def server(input, output, session):
     
     # Reactive value to hold the loaded AnnData object
-    adata_reactive = reactive.Value(None)
+    soma_reactive = reactive.Value(None)
     
     # Reactive value to hold selection choices
     obs_choices = reactive.Value([])
@@ -178,14 +164,14 @@ def server(input, output, session):
             dataset_file = input.dataset()
             if dataset_file:
                 print(f"Loading dataset: {dataset_file}")
-                adata = load_adata(dataset_file)
+                soma, var, obs = load_adata(dataset_file)
                 print(f"Dataset loaded")
-                if adata is not None:
-                    adata_reactive.set(adata)
+                if soma is not None:
+                    soma_reactive.set(soma)
                     # Update choices for obs and var selectors
-                    obs_cols = [col for col in adata.obs.columns]
-                    var_genes = list(adata.var_names)
-                    cat_cols = list(adata.obs.select_dtypes(include=['category', 'object']).columns)
+                    obs_cols = [col for col in obs.columns]
+                    var_genes = list(var[["var_id"]])
+                    cat_cols = list(obs.select_dtypes(include=['category', 'object']).columns)
                     
                     obs_choices.set(obs_cols)
                     var_choices.set(var_genes)
@@ -216,30 +202,30 @@ def server(input, output, session):
 
     @render.ui
     def group1_cat_ui():
-        adata = adata_reactive.get()
+        obs = obs_choices.get()
         col = input.group1_col()
-        if adata is None or not col:
+        if obs is None or not col:
             return None
-        categories = list(adata.obs[col].astype('category').cat.categories)
+        categories = list(obs[col].astype('category').cat.categories)
         return ui.input_selectize("group1_cat", "Select categories for Group 1", choices=categories, multiple=True)
 
     @render.ui
     def group2_cat_ui():
-        adata = adata_reactive.get()
+        obs = obs_choices.get()
         col = input.group2_col()
-        if adata is None or not col:
+        if obs is None or not col:
             return None
-        categories = list(adata.obs[col].astype('category').cat.categories)
+        categories = list(obs[col].astype('category').cat.categories)
         return ui.input_selectize("group2_cat", "Select categories for Group 2", choices=categories, multiple=True)
 
     @render.ui
     @reactive.event(input.generate_plot, input.analyze_selection)
     def plot_or_message_ui():
         # Check we have the data or print error messages
-        adata = adata_reactive.get()
+        soma = soma_reactive.get()
         if not input.generate_plot():
             return ui.p("Please select a dataset and options, then click 'Generate Plot'.")
-        if adata is None:
+        if soma is None:
             return ui.p("Please select a valid dataset.")
             
         selected_obs = input.obs_cols()
@@ -259,21 +245,27 @@ def server(input, output, session):
     def scatter_plot_output():
         import jscatter
         
-        adata = adata_reactive.get()
+        soma = soma_reactive.get()
+        obs = obs_choices.get()
         selected_obs = list(input.obs_cols())
         selected_vars = list(input.var_genes())
 
         group1_selection = group1_indices.get()
         group2_selection = group2_indices.get()
         
-        umap_coords = pd.DataFrame(adata.obsm['X_umap'], columns=['UMAP1', 'UMAP2'], index=adata.obs.index)
-        plot_df = umap_coords.copy()
+        UMAP = soma.ms["RNA"].obsm['X_umap'].read().tables().concat().to_pandas().pivot(
+        index="soma_dim_0",  # Cell/observation index
+        columns="soma_dim_1",  # UMAP dimension (0=UMAP_1, 1=UMAP_2)
+        values="soma_data"  # Coordinate values
+        ).rename(columns={0: "UMAP_1", 1: "UMAP_2"})
+
+        plot_df = UMAP
         
         if selected_obs:
-            plot_df = plot_df.join(adata.obs[selected_obs])
+            plot_df = plot_df.join(obs[selected_obs])
             
         if selected_vars:
-            gene_expression = adata[:, selected_vars].to_df()
+            gene_expression = soma[:, selected_vars].to_df()
             plot_df = plot_df.join(gene_expression)
         
         try:
@@ -313,22 +305,23 @@ def server(input, output, session):
     @reactive.event(input.analyze_selection)    
     def selection_plots():
         base_view = base_jscatter_view.get()
-        adata = adata_reactive.get()
+        soma = soma_reactive.get()
+        obs = obs_choices.get()
 
         g1_col, g1_cat = input.group1_col(), input.group1_cat()
         g2_col, g2_cat = input.group2_col(), input.group2_cat()
         analysis_col = input.analysis_col()
 
         # Validate that all required inputs are present
-        if not all([adata is not None, g1_col, g1_cat, g2_col, g2_cat, analysis_col]):
+        if not all([soma is not None, g1_col, g1_cat, g2_col, g2_cat, analysis_col]):
             fig, ax = plt.subplots()
             ax.text(0.5, 0.5, "Please define both groups and select an analysis column.", ha='center', va='center')
             ax.axis('off')
             return fig
 
         try:
-            indices1 = adata.obs.index[adata.obs[g1_col].isin(g1_cat)]
-            indices2 = adata.obs.index[adata.obs[g2_col].isin(g2_cat)]
+            indices1 = obs.index[obs[g1_col].isin(g1_cat)]
+            indices2 = obs.index[obs[g2_col].isin(g2_cat)]
             group1_indices.set(indices1)
             group2_indices.set(indices2)
             print(f"Group 1: {len(indices1)} cells, Group 2: {len(indices2)} cells")
@@ -346,8 +339,8 @@ def server(input, output, session):
         # print(f"Selected cells: {selected_cells[1:5]}")
         base_view.selection(selected_cells)
 
-        adata_g1 = adata[indices1, :] #.copy()
-        adata_g2 = adata[indices2, :] #.copy()
+        adata_g1 = soma[indices1, :] #.copy()
+        adata_g2 = soma[indices2, :] #.copy()
 
         fig, axes = plt.subplots(2, 2, figsize=(16, 12), layout="constrained")
         fig.suptitle("Paired Group Analysis", fontsize=18)
